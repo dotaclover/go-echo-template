@@ -2,6 +2,7 @@ package database
 
 import (
 	"myapp/models"
+	"myapp/services"
 	"myapp/utils"
 
 	"gorm.io/gorm"
@@ -14,6 +15,7 @@ func RunMigrations(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&models.User{},
 		&models.Setting{},
+		&services.QueueTask{},
 		// 在此添加新模型...
 	); err != nil {
 		return err
