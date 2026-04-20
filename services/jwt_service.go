@@ -9,30 +9,67 @@ import (
 
 // JWTService JWT 令牌服务
 type JWTService struct {
-	secret     string
-	expiration time.Duration
+	secret            string
+	expiration        time.Duration
+	refreshExpiration time.Duration
 }
 
 // JWTClaims 自定义 Claims
 type JWTClaims struct {
-	UserID   int64  `json:"user_id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	UserID    int64  `json:"user_id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	TokenType string `json:"token_type"`
 	jwt.RegisteredClaims
 }
 
-func NewJWTService(secret string, expiration time.Duration) *JWTService {
-	return &JWTService{secret: secret, expiration: expiration}
+type TokenPair struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
 }
 
-// Generate 生成 Token
+func NewJWTService(secret string, expiration, refreshExpiration time.Duration) *JWTService {
+	return &JWTService{secret: secret, expiration: expiration, refreshExpiration: refreshExpiration}
+}
+
+// Generate 生成 access token
 func (s *JWTService) Generate(userID int64, username, role string) (string, error) {
+	return s.generate(userID, username, role, "access", s.expiration)
+}
+
+// GenerateRefresh 生成 refresh token
+func (s *JWTService) GenerateRefresh(userID int64, username, role string) (string, error) {
+	return s.generate(userID, username, role, "refresh", s.refreshExpiration)
+}
+
+// GenerateTokenPair 生成 access + refresh token
+func (s *JWTService) GenerateTokenPair(userID int64, username, role string) (*TokenPair, error) {
+	accessToken, err := s.Generate(userID, username, role)
+	if err != nil {
+		return nil, err
+	}
+	refreshToken, err := s.GenerateRefresh(userID, username, role)
+	if err != nil {
+		return nil, err
+	}
+	return &TokenPair{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    int64(s.expiration.Seconds()),
+	}, nil
+}
+
+func (s *JWTService) generate(userID int64, username, role, tokenType string, expiration time.Duration) (string, error) {
 	claims := JWTClaims{
-		UserID:   userID,
-		Username: username,
-		Role:     role,
+		UserID:    userID,
+		Username:  username,
+		Role:      role,
+		TokenType: tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.expiration)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
@@ -60,10 +97,13 @@ func (s *JWTService) Parse(tokenString string) (*JWTClaims, error) {
 }
 
 // Refresh 刷新 Token（返回新 Token）
-func (s *JWTService) Refresh(tokenString string) (string, error) {
+func (s *JWTService) Refresh(tokenString string) (*TokenPair, error) {
 	claims, err := s.Parse(tokenString)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return s.Generate(claims.UserID, claims.Username, claims.Role)
+	if claims.TokenType != "refresh" {
+		return nil, errors.New("invalid token type")
+	}
+	return s.GenerateTokenPair(claims.UserID, claims.Username, claims.Role)
 }

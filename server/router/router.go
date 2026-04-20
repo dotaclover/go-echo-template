@@ -1,10 +1,12 @@
 package router
 
 import (
+	"myapp/common"
 	"myapp/config"
 	"myapp/modules/user"
 	"myapp/server/database"
 	"myapp/server/middlewares"
+	"myapp/services"
 
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
@@ -12,39 +14,41 @@ import (
 
 // RegisterRoutes 注册所有路由
 func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config) {
-	// 设置 JWT 密钥
-	middlewares.SetJWTSecret(cfg.JWT.Secret)
+	jwtService := services.NewJWTService(cfg.JWT.Secret, cfg.JWT.Expiration, cfg.JWT.RefreshExpiration)
 
 	// ===== 健康检查（公开）=====
-	e.GET("/health", func(c echo.Context) error {
+	e.GET("/health/live", func(c echo.Context) error {
+		return common.Success(c, "Service is live", map[string]string{"status": "live"})
+	})
+	e.GET("/health/ready", func(c echo.Context) error {
 		if err := database.HealthCheck(db); err != nil {
-			return c.JSON(503, map[string]string{"status": "unhealthy", "error": err.Error()})
+			return common.Error(c, common.InternalError(err.Error()))
 		}
-		return c.JSON(200, map[string]string{"status": "healthy"})
+		return common.Success(c, "Service is ready", map[string]string{"status": "ready"})
 	})
 
-	// ===== 用户模块（自带路由注册）=====
+	// ===== 用户模块 =====
 	userRepo := user.NewRepository(db)
-	userService := user.NewService(userRepo, cfg.JWT.Secret)
+	userService := user.NewService(userRepo, jwtService)
 	userHandler := user.NewHandler(userService)
-	userHandler.RegisterRoutes(e)
 
 	// ===== API 路由组 =====
-	apiGroup := e.Group("/api")
+	apiGroup := e.Group("/api/v1")
+	publicGroup := apiGroup.Group("")
 
 	// 需要认证的路由
 	authGroup := apiGroup.Group("")
-	authGroup.Use(middlewares.JWTAuth())
+	authGroup.Use(middlewares.JWTAuth(jwtService))
 
 	// 管理员路由
 	adminGroup := apiGroup.Group("")
-	adminGroup.Use(middlewares.JWTAuth(), middlewares.AdminOnly())
+	adminGroup.Use(middlewares.JWTAuth(jwtService), middlewares.AdminOnly())
 
-	// ===== 在此注册业务模块路由 =====
-	// example:
-	// product.RegisterRoutes(authGroup, db)
-	// order.RegisterAdminRoutes(adminGroup, db)
+	authPublicGroup := publicGroup.Group("/auth")
+	authPrivateGroup := authGroup.Group("/auth")
+	adminUsersGroup := adminGroup.Group("/admin/users")
 
-	_ = authGroup
-	_ = adminGroup
+	userHandler.RegisterPublicRoutes(authPublicGroup)
+	userHandler.RegisterAuthRoutes(authPrivateGroup)
+	userHandler.RegisterAdminRoutes(adminUsersGroup)
 }

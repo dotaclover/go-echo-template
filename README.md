@@ -1,41 +1,104 @@
 # Go Echo Template v0.1.0
 
-基于 Echo + GORM 的 Go Web 项目模板，开箱即用。
+基于 Echo + GORM 的 Go 后端模板，默认提供完整的用户认证链路、统一响应与错误处理、CLI 启动方式、可配置限流、健康检查和可复用模块结构。
 
-## 技术栈
+## 核心特性
 
-- **Web**: [Echo v4](https://echo.labstack.com/)
-- **ORM**: [GORM v2](https://gorm.io/) (MySQL / SQLite)
-- **日志**: Logrus + Lumberjack (切割)
-- **缓存**: Redis / 内存双实现
-- **队列**: SQLite / Redis 任务队列
-- **认证**: JWT (HS256)
+- **Web 框架**: Echo v4
+- **ORM**: GORM v2，支持 SQLite / MySQL
+- **认证体系**: JWT Access Token + Refresh Token
+- **工程骨架**: `handler/service/repository` 分层
+- **统一协议**: 标准化 API 响应、统一错误结构、请求 ID
+- **生产基础能力**: 优雅关闭、读写超时、可配置限流、日志切割
+- **模板复用性**: 模块边界清晰，新增业务模块成本低
 
 ## 快速开始
 
 ```bash
-# 1. 克隆 & 进入目录
+# 1. 克隆项目
 git clone <repo-url> myapp
 cd myapp
 
-# 2. 修改 go.mod 中的 module 名称
-#    将 "myapp" 替换为你的项目名，如 "github.com/yourname/myapp"
-
-# 3. 配置环境变量
+# 2. 配置环境变量
 cp .env.example .env
-# 编辑 .env，至少修改 JWT_SECRET
+# 至少修改 JWT_SECRET
 
-# 4. 安装依赖
+# 3. 安装依赖
 go mod tidy
 
-# 5. 数据库迁移 + 填充测试数据
+# 4. 执行迁移与种子数据
 go run . migrate
 go run . seed
 
-# 6. 启动服务
+# 5. 启动服务
 go run . serve
-# => http://localhost:8080
 ```
+
+服务默认启动于：`http://localhost:8080`
+
+## 文档索引
+
+- **接口文档**: `./api.md`
+- **环境变量模板**: `./.env.example`
+
+## 当前 API 概览
+
+### 健康检查
+
+```text
+GET /health/live
+GET /health/ready
+```
+
+### 认证相关
+
+```text
+POST /api/v1/auth/register
+POST /api/v1/auth/login
+POST /api/v1/auth/refresh
+GET  /api/v1/auth/profile
+PUT  /api/v1/auth/profile
+POST /api/v1/auth/password
+```
+
+### 管理员用户管理
+
+```text
+GET    /api/v1/admin/users
+GET    /api/v1/admin/users/:id
+POST   /api/v1/admin/users
+PUT    /api/v1/admin/users/:id
+PATCH  /api/v1/admin/users/:id/status
+DELETE /api/v1/admin/users/:id
+```
+
+## 启动流程
+
+服务入口为 `main.go`，通过 CLI 命令分发到 `cmd/commands/serve.go`。
+
+`serve` 命令的核心启动流程如下：
+
+1. 加载 `.env` 与运行配置
+2. 初始化日志
+3. 初始化数据库并做健康检查
+4. 创建 Echo 实例并挂载：
+   - Request ID
+   - Recover
+   - CORS
+   - 可选全局限流
+   - Debug Logger
+5. 注册路由与业务模块
+6. 使用 HTTP Server 配置超时参数
+7. 监听系统信号并优雅关闭
+
+## 默认测试账号
+
+执行 `go run . seed` 后：
+
+| 用户名 | 密码 | 角色 |
+|------|------|------|
+| admin | admin123 | admin |
+| user01 | user123 | user |
 
 ## CLI 命令
 
@@ -134,47 +197,28 @@ go run . help                   # 查看所有命令
 
 ## API 接口
 
-### 公开接口
+完整接口说明请查看 `api.md`。
 
-```
-GET  /health                    # 健康检查
-POST /api/auth/login            # 登录
-```
-
-### 需要认证（Bearer Token）
-
-```
-GET  /api/auth/profile          # 获取个人信息
-PUT  /api/auth/profile          # 更新个人信息
-POST /api/auth/password         # 修改密码
-```
-
-### 管理员接口（Bearer Token + admin 角色）
-
-```
-GET    /api/admin/users         # 用户列表
-POST   /api/admin/users         # 创建用户
-```
-
-### 接口示例
+### 快速示例
 
 ```bash
 # 登录
-curl -X POST http://localhost:8080/api/auth/login \
+curl -X POST http://localhost:8080/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin123"}'
 
-# 返回示例
-# {"token":"eyJhbGci...","user":{"id":1,"username":"admin","role":"admin",...}}
+# 刷新 token
+curl -X POST http://localhost:8080/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"<refresh-token>"}'
 
-# 使用 Token 访问
-TOKEN="eyJhbGci..."
+# 访问个人资料
+curl http://localhost:8080/api/v1/auth/profile \
+  -H "Authorization: Bearer <access-token>"
 
-curl http://localhost:8080/api/auth/profile \
-  -H "Authorization: Bearer $TOKEN"
-
-curl http://localhost:8080/health
-# {"status":"healthy"}
+# 健康检查
+curl http://localhost:8080/health/live
+curl http://localhost:8080/health/ready
 ```
 
 ## 环境变量
@@ -191,9 +235,20 @@ curl http://localhost:8080/health
 | `DB_NAME` | `myapp` | MySQL 数据库名 |
 | `JWT_SECRET` | (内置默认值) | JWT 签名密钥（生产环境必须修改） |
 | `JWT_EXPIRATION` | `168h` | JWT 过期时间 |
+| `JWT_REFRESH_EXPIRATION` | `336h` | Refresh Token 过期时间 |
+| `APP_NAME` | `MyApp` | 应用名 |
+| `APP_VERSION` | `0.1.0` | 应用版本 |
+| `APP_ENV` | `development` | 运行环境 |
 | `APP_HOST` | `localhost` | 监听地址 |
 | `APP_PORT` | `8080` | 监听端口 |
 | `APP_DEBUG` | `true` | 调试模式 |
+| `APP_READ_TIMEOUT` | `15s` | 读取超时 |
+| `APP_WRITE_TIMEOUT` | `15s` | 写入超时 |
+| `APP_IDLE_TIMEOUT` | `60s` | 空闲连接超时 |
+| `APP_SHUTDOWN_TIMEOUT` | `30s` | 优雅关闭超时 |
+| `RATE_LIMIT_ENABLED` | `false` | 是否启用全局限流 |
+| `RATE_LIMIT_LIMIT` | `120` | 窗口内允许请求数 |
+| `RATE_LIMIT_WINDOW` | `1m` | 限流时间窗口 |
 | `LOG_LEVEL` | `info` | 日志级别：trace/debug/info/warn/error |
 | `LOG_FORMAT` | `text` | 日志格式：text/json |
 | `LOG_OUTPUT` | `both` | 输出目标：stdout/file/both |

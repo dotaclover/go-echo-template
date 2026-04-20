@@ -2,6 +2,7 @@ package user
 
 import (
 	"errors"
+	"myapp/common"
 	"myapp/models"
 
 	"gorm.io/gorm"
@@ -12,6 +13,7 @@ type Repository interface {
 	Create(user *models.User) error
 	FindByID(id int64) (*models.User, error)
 	FindByUsername(username string) (*models.User, error)
+	FindByEmail(email string) (*models.User, error)
 	Update(user *models.User) error
 	Delete(id int64) error
 	List(page, pageSize int) ([]models.User, int64, error)
@@ -34,7 +36,7 @@ func (r *repository) FindByID(id int64) (*models.User, error) {
 	err := r.db.First(&user, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("user not found")
+			return nil, common.NotFoundError("user not found")
 		}
 		return nil, err
 	}
@@ -44,6 +46,21 @@ func (r *repository) FindByID(id int64) (*models.User, error) {
 func (r *repository) FindByUsername(username string) (*models.User, error) {
 	var user models.User
 	err := r.db.Where("username = ?", username).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *repository) FindByEmail(email string) (*models.User, error) {
+	if email == "" {
+		return nil, nil
+	}
+	var user models.User
+	err := r.db.Where("email = ?", email).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil

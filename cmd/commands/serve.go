@@ -3,14 +3,17 @@ package commands
 import (
 	"context"
 	"fmt"
+	"myapp/common"
 	"myapp/config"
 	"myapp/server/database"
+	"myapp/server/middlewares"
 	"myapp/server/router"
+	"myapp/services"
 	"myapp/utils"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
@@ -72,9 +75,24 @@ func (c *ServeCommand) Execute(args []string) error {
 	e.HideBanner = true
 	e.HidePort = true
 	e.Validator = &CustomValidator{validator: utils.Validator}
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		if c.Response().Committed {
+			return
+		}
+		_ = common.Error(c, err)
+	}
 
+	e.Use(middlewares.RequestID())
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORS())
+	if cfg.App.RateLimitEnabled {
+		limiter := services.NewMemoryRateLimiter()
+		e.Use(middlewares.RateLimit(middlewares.RateLimitConfig{
+			Limiter: limiter,
+			Limit:   cfg.App.RateLimitLimit,
+			Window:  cfg.App.RateLimitWindow,
+		}))
+	}
 	if cfg.App.Debug {
 		e.Use(middleware.Logger())
 	}
@@ -88,6 +106,8 @@ func (c *ServeCommand) Execute(args []string) error {
 	}
 	utils.Logger.Infof("Server starting on %s", addr)
 
+	serverErrCh := make(chan error, 1)
+
 	// 优雅关闭
 	go func() {
 		sigChan := make(chan os.Signal, 1)
@@ -97,7 +117,7 @@ func (c *ServeCommand) Execute(args []string) error {
 		utils.Logger.Info("Shutting down...")
 		database.CloseDB(db)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.App.ShutdownTimeout)
 		defer cancel()
 		if err := e.Shutdown(ctx); err != nil {
 			utils.Logger.Errorf("Server shutdown error: %v", err)
@@ -106,7 +126,19 @@ func (c *ServeCommand) Execute(args []string) error {
 		os.Exit(0)
 	}()
 
-	if err := e.Start(addr); err != nil {
+	go func() {
+		server := &http.Server{
+			Addr:         addr,
+			ReadTimeout:  cfg.App.ReadTimeout,
+			WriteTimeout: cfg.App.WriteTimeout,
+			IdleTimeout:  cfg.App.IdleTimeout,
+		}
+		if err := e.StartServer(server); err != nil && err != http.ErrServerClosed {
+			serverErrCh <- err
+		}
+	}()
+
+	if err := <-serverErrCh; err != nil {
 		return fmt.Errorf("server error: %v", err)
 	}
 	return nil
